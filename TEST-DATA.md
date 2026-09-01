@@ -1,9 +1,4 @@
 # Test data
-
-Fictitious attendee addresses and meeting names for testing the workflows.
-Only reserved addresses of the `example.com` domain (RFC 2606) are used, so that
-**no real people** are contacted.
-
 ## Proposed test set
 
 Each meeting is designed to trigger a specific expected action. This makes it
@@ -45,11 +40,12 @@ passed to the LLM.
 
 ## Fictitious attendee addresses
 
-For meetings with many attendees, use as many addresses as needed from this list
-(`test1@example.com` through `testn@example.com`):
+Fictitious attendee addresses and meeting names for testing the workflows.
+Only reserved addresses of the `example.com` domain (RFC 2606) are used, so that
+**no real people** are contacted.
 
 ```
-test1@example.com, test2@example.com, test3@example.com, test4@example.com, test5@example.com, test6@example.com, test7@example.com, test8@example.com, test9@example.com, test10@example.com, test11@example.com, test12@example.com, test13@example.com, test14@example.com, test15@example.com, test16@example.com, test17@example.com, test18@example.com, test19@example.com, test20@example.com, test21@example.com, test22@example.com, test23@example.com, test24@example.com, test25@example.com, test26@example.com, test27@example.com, test28@example.com, test29@example.com, test30@example.com ... testn@example.com
+max.mustermann@example.com, erika.musterfrau@example.com, john.doe@example.com, jane.smith@example.com, hans.mueller@example.com, anna.schmidt@example.com, peter.fischer@example.com, sabine.weber@example.com, michael.meyer@example.com, julia.wagner@example.com, david.brown@example.com, sarah.miller@example.com, james.wilson@example.com, emily.taylor@example.com, robert.thomas@example.com, jessica.white@example.com, daniel.martin@example.com, laura.anderson@example.com, thomas.jackson@example.com, lisa.thompson@example.com, christian.becker@example.com, nicole.hoffmann@example.com, stefan.schaefer@example.com, melanie.koch@example.com, alexander.bauer@example.com, christina.richter@example.com, martin.klein@example.com, nadine.wolf@example.com, andreas.schroeder@example.com, tanja.neumann@example.com, matthias.schwarz@example.com, sandra.braun@example.com, jan.kruger@example.com, vanessa.hofmann@example.com, markus.hartmann@example.com, anita.lange@example.com, juergen.schmitt@example.com, petra.werner@example.com, frank.schmitz@example.com, sonja.krause@example.com, stefanie.meier@example.com, oliver.lehmann@example.com, kerstin.schmid@example.com, torsten.mueller@example.com, daniela.koenig@example.com, rene.germann@example.com, manuela.walter@example.com, patrick.kaiser@example.com, claudia.fuchs@example.com, sebastian.weber@example.com
 ```
 
 # Automated seeding approach failed
