@@ -1,0 +1,1054 @@
+{
+  "name": "Outlook OOO Auto Cancel & Decline | AI Intent-Protected",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Out of Office — Cancel & Decline Meetings (AI Intent-Protected)",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "First Day of Absence",
+              "fieldType": "date",
+              "fieldName": "firstDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Last Day of Absence",
+              "fieldType": "date",
+              "fieldName": "lastDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reason (will be added to the cancellation/decline email)",
+              "fieldName": "reason",
+              "placeholder": "e.g. on vacation, sick leave, business trip",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit",
+          "customCss": "button[type=\"submit\"]:disabled::after{content:\"Do not close this window. Outlook Events are loading.\";display:block;margin-top:12px;color:#c5221f;font-weight:600;font-size:0.9rem;}"
+        }
+      },
+      "id": "9320d827-3e16-4ba8-81c4-b7e472720622",
+      "name": "On form submission",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $json.firstDay;\nconst last = $json.lastDay;\nreturn [{ json: {\n  rangeStart: first + 'T00:00:00',\n  rangeEnd: last + 'T23:59:59',\n  reason: $json.reason\n} }];"
+      },
+      "id": "70e855a5-f5cf-4e5a-82f7-ae48cde918d2",
+      "name": "Build Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "includeRecurringInstances": true,
+        "startDateTime": "={{ $json.rangeStart }}",
+        "endDateTime": "={{ $json.rangeEnd }}",
+        "returnAll": true,
+        "output": "raw"
+      },
+      "id": "d86858da-89f1-46ee-81c1-49cbfba9da9e",
+      "name": "Get Events In Range",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ],
+      "alwaysOutputData": true,
+      "webhookId": "624b2e4f-a96c-46a6-a59b-e591a994eeaf",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic pre-step: retrieval + HARD whitelist stay rule-based.\n// Drop cancelled + whitelisted events (hard override no AI stage can overrule),\n// then emit one item per candidate event for the two AI stages to reason on.\nconst events = $input.all();\nconst out = [];\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nfor (const it of events) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (isWhitelisted) continue;\n  const attendees = Array.isArray(e.attendees) ? e.attendees : [];\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  const isRecurring = !!e.recurrence || (e.type && e.type !== 'singleInstance');\n  out.push({ json: {\n    id: e.id,\n    subject: e.subject || '(no subject)',\n    isOrganizer: e.isOrganizer === true,\n    attendeeCount: attendees.length,\n    responseRequested: e.responseRequested === true,\n    isRecurring: !!isRecurring,\n    day: fmtDay(startRaw),\n    start: startRaw ? startRaw.replace('T', ' ').slice(0, 16) : 'unknown time'\n  } });\n}\nreturn out;"
+      },
+      "id": "11d265a0-8bcf-480e-a128-0b1ce4296d41",
+      "name": "Prefilter Candidates (Deterministic)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Assess whether this single calendar event should be PROTECTED (kept) during an out-of-office period because of its intent / importance. Return json.\n\nEvent details:\nSubject: {{ $json.subject }}\nAm I the organizer: {{ $json.isOrganizer }}\nNumber of other attendees: {{ $json.attendeeCount }}\nRecurring / series event: {{ $json.isRecurring }}\nWhen: {{ $json.day }} {{ $json.start }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You decide whether a calendar event should be protected from cancellation/decline while the user is out of office, based only on its intent. Return json with keys protected (boolean), label, confidence (0..1) and reason.\n\nProtect (protected=true) ONLY when there is a CLEAR signal for one of these intents:\n- \"active_contribution\": the user must actively contribute — they present, chair, decide, or are the sole knowledge holder. This INCLUDES a small meeting the user organized with only one or two other people (e.g. a 1:1 with a manager) where the user clearly drives the discussion.\n- \"relationship_career\": the meeting is relationship- or career-critical — a 1:1 with a manager, a client meeting, a review or an interview — where cancelling would carry real social or professional cost.\n- \"stay_informed\": a large all-hands / town hall / company update where the user is one of many attendees but the content is important to stay informed on.\nWhen none of these clearly applies, return protected=false and label \"none\".\n\nYou only have the subject, the organizer flag, the number of other attendees and the recurrence flag. You do NOT have attendee roles, names or relationships. Do NOT invent relationships (such as \"manager\" or \"client\") that are not evident from the subject. If the signal is weak or ambiguous, set protected=false and confidence below 0.5. Protect only on a clear signal — a low-confidence protection will be ignored and the event will fall through to the normal action logic."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "a9a7dbe8-793a-49af-8754-d4beab34a036",
+      "name": "AI Intent Protection",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        896,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "reasoningEffort": "low"
+        }
+      },
+      "id": "be1c094a-b018-4580-a424-7b60a7dfe0ee",
+      "name": "OpenAI Model (Intent)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        528
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "7vutZsA6LWMxH9Nl",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"protected\":true,\"label\":\"relationship_career\",\"confidence\":0.8,\"reason\":\"Short human-readable justification for protecting (or not protecting) this event.\"}"
+      },
+      "id": "40b3b7e6-6648-49fa-b520-4a9e5c5fc1c1",
+      "name": "Intent Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pair the intent AI output (by index) with the candidate list.\n// Intent protection is a SOFT override: it only holds when the model is\n// confident (>= 0.5). Weak/ambiguous protection is dropped so the event\n// falls through to the normal action classification. All items pass on.\nconst aiItems = $input.all();\nconst candidates = $('Prefilter Candidates (Deterministic)').all();\nconst out = [];\nfor (let i = 0; i < candidates.length; i++) {\n  const cand = (candidates[i] && candidates[i].json) || {};\n  if (!cand.id) continue;\n  const a = (aiItems[i] && aiItems[i].json) || {};\n  const parsed = a.output || a;\n  const protectedRaw = parsed.protected === true;\n  const conf = typeof parsed.confidence === 'number' ? parsed.confidence : 0;\n  let label = String(parsed.label || 'none').trim().toLowerCase();\n  const validLabels = ['active_contribution', 'relationship_career', 'stay_informed', 'none'];\n  if (validLabels.indexOf(label) === -1) label = protectedRaw ? 'active_contribution' : 'none';\n  // Effective protection requires a clear signal (confidence >= 0.5).\n  const intentProtected = protectedRaw && conf >= 0.5;\n  out.push({ json: {\n    id: cand.id,\n    subject: cand.subject,\n    isOrganizer: cand.isOrganizer === true,\n    attendeeCount: cand.attendeeCount,\n    responseRequested: cand.responseRequested === true,\n    isRecurring: cand.isRecurring === true,\n    day: cand.day,\n    start: cand.start,\n    intentProtected: intentProtected,\n    intentLabel: intentProtected ? label : 'none',\n    intentConfidence: conf,\n    intentReason: String(parsed.reason || '')\n  } });\n}\nreturn out;"
+      },
+      "id": "42f9c394-ab53-46ec-8c9c-9e5ba709abdd",
+      "name": "Apply Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        304
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Classify this single calendar event for an out-of-office period. Return json.\n\nEvent details:\nSubject: {{ $json.subject }}\nAm I the organizer: {{ $json.isOrganizer }}\nNumber of other attendees: {{ $json.attendeeCount }}\nA response to the invitation is requested: {{ $json.responseRequested }}\nRecurring / series event: {{ $json.isRecurring }}\nWhen: {{ $json.day }} {{ $json.start }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You decide what to do with a calendar event while the user is out of office. Choose exactly one action and return json with keys action, confidence (0..1) and reason.\n\nAllowed actions:\n- \"cancel\": the user ORGANIZES the meeting and there are attendees. Cancelling notifies everyone and removes it for all.\n- \"decline\": the user was INVITED (not organizer) and a response is requested. Declines with a note, meeting stays for others.\n- \"delete\": the user was invited, no response is expected/possible, but the entry should be removed from the user's own calendar only.\n- \"keep\": leave the event untouched. Use this as the SAFE fallback whenever you are unsure, when the event looks important to keep informed on (e.g. very large meetings, all-hands, town halls where the user is one of many), or when none of the other actions clearly fit.\n\nPrefer \"keep\" over guessing. Set confidence below 0.5 when uncertain; a low-confidence result will be treated as keep."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "74102857-c5ee-441e-bc8e-7040a9dec649",
+      "name": "AI Classify Event",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1472,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "reasoningEffort": "low"
+        }
+      },
+      "id": "039558e5-2696-4925-bc6d-44820bd7700b",
+      "name": "OpenAI Model (Action)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1488,
+        528
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "7vutZsA6LWMxH9Nl",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"action\":\"cancel\",\"confidence\":0.9,\"reason\":\"Short human-readable justification for the chosen action.\"}"
+      },
+      "id": "6cad349c-4f0e-433c-bdc1-2511b02b39cf",
+      "name": "Decision Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1616,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine the two AI stages into one proposal per event.\n// Intent protection (soft override) wins: a protected event is proposed as keep,\n// regardless of the action model. Otherwise apply the action with the confidence\n// fallback (invalid action or confidence < 0.5 -> keep). The raw action decision\n// is still recorded so the effect of the intent layer is auditable.\nconst aiItems = $input.all();\nconst enriched = $('Apply Intent').all();\nconst out = [];\nfor (let i = 0; i < enriched.length; i++) {\n  const e = (enriched[i] && enriched[i].json) || {};\n  if (!e.id) continue;\n  const a = (aiItems[i] && aiItems[i].json) || {};\n  const parsed = a.output || a;\n  let action = String(parsed.action || '').trim().toLowerCase();\n  const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 1;\n  const destructive = (action === 'cancel' || action === 'decline' || action === 'delete');\n  if (!destructive || confidence < 0.5) action = 'keep';\n  // Intent protection overrides the action to keep.\n  const proposed = e.intentProtected === true ? 'keep' : action;\n  const proposedSource = e.intentProtected === true ? 'intent' : 'action';\n  out.push({ json: {\n    id: e.id,\n    subject: e.subject,\n    day: e.day,\n    start: e.start,\n    isOrganizer: e.isOrganizer === true,\n    attendeeCount: e.attendeeCount,\n    responseRequested: e.responseRequested === true,\n    isRecurring: e.isRecurring === true,\n    intentProtected: e.intentProtected === true,\n    intentLabel: e.intentLabel,\n    intentConfidence: e.intentConfidence,\n    intentReason: e.intentReason,\n    aiAction: action,\n    aiConfidence: confidence,\n    aiReason: String(parsed.reason || ''),\n    proposedAction: proposed,\n    proposedSource: proposedSource\n  } });\n}\nreturn out;"
+      },
+      "id": "1d6e40c1-e030-41f7-9b24-8af4a59e70e3",
+      "name": "Classify Proposals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        304
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the dynamic per-event review form: one dropdown per candidate event,\n// pre-selected with the proposed action (intent-protected -> keep), overridable.\nconst props = $input.all().filter(function (i) { return i.json && i.json.id; });\nconst rawEvents = $('Get Events In Range').all();\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nconst fmtTime = function (raw) {\n  if (!raw) return '';\n  return String(raw).slice(11, 16);\n};\n// Collect HARD-whitelisted (protected) meetings for the description text.\nconst whitelisted = [];\nfor (const it of rawEvents) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (!isWhitelisted) continue;\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  whitelisted.push({ day: fmtDay(startRaw), time: fmtTime(startRaw), subject: e.subject || '(no subject)' });\n}\n// Per candidate event: one HTML card (two columns: current state vs. AI\n// proposal) followed by one short dropdown. The card replaces the long\n// dropdown label so the user can tell apart the original event state and\n// what the AI suggests at a glance. Dropdown fieldNames stay 'decision_<i>'\n// so the logging and execution steps keep working by index.\nconst esc = function (s) {\n  return String(s == null ? '' : s)\n    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n};\nconst fields = [];\nfor (let i = 0; i < props.length; i++) {\n  const e = props[i].json;\n  const isOrganizer = e.isOrganizer === true;\n  const options = isOrganizer\n    ? [{ option: 'cancel' }, { option: 'keep' }]\n    : [{ option: 'decline' }, { option: 'delete' }, { option: 'keep' }];\n  const allowed = options.map(function (o) { return o.option; });\n  const defaultValue = allowed.indexOf(e.proposedAction) !== -1 ? e.proposedAction : 'keep';\n  const actConf = Math.round((typeof e.aiConfidence === 'number' ? e.aiConfidence : 1) * 100);\n  const role = isOrganizer ? 'organizer' : 'invited';\n  const time = String(e.start || '').slice(11, 16);\n  const whenLine = e.day + (time ? ' ' + time : '');\n  // Left column: the event as it currently stands (unchanged).\n  let left = 'Role: <b>' + esc(role) + '</b><br>';\n  left += 'Other attendees: ' + esc(e.attendeeCount) + '<br>';\n  left += 'Recurring: ' + (e.isRecurring === true ? 'yes' : 'no') + '<br>';\n  left += 'Response requested: ' + (e.responseRequested === true ? 'yes' : 'no') + '<br>';\n  left += 'Status: <b>active</b> (currently in calendar)';\n  // Right column: what the AI proposes and why.\n  let right = 'Proposed action: <b>' + esc(e.proposedAction) + '</b><br>';\n  if (e.intentProtected === true) {\n    const intConf = Math.round((typeof e.intentConfidence === 'number' ? e.intentConfidence : 0) * 100);\n    right += '<span style=\"color:#0a7d2c;\">Protected: ' + esc(e.intentLabel) + ' (' + intConf + '%)</span><br>';\n    right += 'Raw action model: ' + esc(e.aiAction) + ' (' + actConf + '%)<br>';\n    right += '<i>' + esc(e.intentReason) + '</i>';\n  } else {\n    right += 'Confidence: ' + actConf + '%<br>';\n    right += '<i>' + esc(e.aiReason) + '</i>';\n  }\n  let card = '<div style=\"border:1px solid #e2e2e6;border-radius:8px;padding:10px 14px;margin:8px 0 -4px;background:#fbfbfd;\">';\n  card += '<div style=\"font-weight:600;font-size:1rem;margin-bottom:8px;\">' + esc(whenLine) + ' — ' + esc(e.subject) + '</div>';\n  card += '<table style=\"width:100%;border-collapse:collapse;table-layout:fixed;\">';\n  card += '<tr>';\n  card += '<th style=\"text-align:left;width:50%;padding:4px 8px;background:#eef1fb;border-bottom:1px solid #ccd;font-size:0.82rem;\">Current state</th>';\n  card += '<th style=\"text-align:left;width:50%;padding:4px 8px;background:#e9f7ee;border-bottom:1px solid #cdc;font-size:0.82rem;\">AI proposal</th>';\n  card += '</tr><tr>';\n  card += '<td style=\"vertical-align:top;padding:6px 8px;font-size:0.9rem;line-height:1.5;\">' + left + '</td>';\n  card += '<td style=\"vertical-align:top;padding:6px 8px;font-size:0.9rem;line-height:1.5;\">' + right + '</td>';\n  card += '</tr></table></div>';\n  fields.push({ fieldType: 'html', elementName: 'info_' + i, html: card });\n  fields.push({ fieldLabel: 'Your decision — ' + e.subject, fieldName: 'decision_' + i, fieldType: 'dropdown', fieldOptions: { values: options }, defaultValue: defaultValue, requiredField: true });\n}\n// Description: intro + hard-whitelist list (HTML).\nlet desc = '<p>For each meeting you see its <b>current state</b> (left) next to the <b>AI proposal</b> (right). Intent-protected meetings are pre-set to <b>keep</b>. Pick an action per meeting, then confirm.</p>';\ndesc += '<p><b>' + whitelisted.length + '</b> hard-whitelisted meeting(s) are protected and will NOT be changed';\nif (whitelisted.length > 0) {\n  desc += ':</p><div style=\"list-style:none;padding:0;margin:0;\">';\n  for (const w of whitelisted) { desc += '<div>' + w.day + ' — ' + w.subject + '</div>'; }\n  desc += '</div>';\n} else {\n  desc += '.</p>';\n}\nlet noEventsText = '';\nif (whitelisted.length === 0) {\n  noEventsText = 'No events were determined in the selected time frame.';\n} else {\n  noEventsText = whitelisted.length + ' determined meeting(s):\\n\\n';\n  const lines = [];\n  for (const w of whitelisted) { const when = w.time ? (w.day + ' ' + w.time) : w.day; lines.push(when + ' — ' + w.subject); }\n  noEventsText += lines.join('\\n');\n}\nnoEventsText += '\\n\\nYou can close this window.';\nreturn [{ json: { formFieldsJson: JSON.stringify(fields), reviewDescriptionHtml: desc, noEventsText: noEventsText, count: props.length, whitelistedCount: whitelisted.length } }];"
+      },
+      "id": "6ed35100-6ae8-40f3-b106-51b8d3090ad8",
+      "name": "Build Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2048,
+        304
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasEvents",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "21780d6c-3bae-4fdb-954c-1a84b71c8f69",
+      "name": "Any Events?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2272,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.parse($json.formFieldsJson) }}",
+        "options": {
+          "formTitle": "Review AI-determined events (intent-protected)",
+          "formDescription": "={{ $json.reviewDescriptionHtml }}",
+          "buttonLabel": "Confirm decisions",
+          "customCss": ".container{max-width:min(80vw,1100px) !important;width:80vw !important;}.card{max-width:min(80vw,1100px) !important;width:80vw !important;}"
+        }
+      },
+      "id": "74e33003-9db7-4c47-82ce-533f291baca6",
+      "name": "Review & Approve",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        2496,
+        208
+      ],
+      "webhookId": "a8996460-79b3-4fe5-bce7-5814ecb81c85"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One log row per candidate event: intent decision + action decision + human final.\nconst cands = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst form = $('Review & Approve').first().json || {};\nconst runId = String($execution.id);\nconst now = new Date().toISOString();\nconst out = [];\nfor (let i = 0; i < cands.length; i++) {\n  const e = cands[i].json;\n  const human = String(form['decision_' + i] || e.proposedAction).trim().toLowerCase();\n  const overridden = human !== e.proposedAction;\n  out.push({ json: {\n    run_id: runId,\n    logged_at: now,\n    event_subject: e.subject,\n    event_day: e.day,\n    intent_protected: e.intentProtected === true,\n    intent_label: e.intentLabel,\n    intent_confidence: (typeof e.intentConfidence === 'number' ? e.intentConfidence : 0),\n    intent_reason: e.intentReason,\n    ai_action: e.aiAction,\n    ai_confidence: (typeof e.aiConfidence === 'number' ? e.aiConfidence : 1),\n    ai_reason: e.aiReason,\n    proposed_action: e.proposedAction,\n    human_final_action: human,\n    was_overridden: overridden\n  } });\n}\nreturn out;"
+      },
+      "id": "715ff2a0-2b03-4522-85ba-a1ce08f59783",
+      "name": "Build Log Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gxw1ixDRVJnxazY3",
+          "cachedResultName": "OOO AI Intent Decision Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "value": {
+            "run_id": "={{ $json.run_id }}",
+            "logged_at": "={{ $json.logged_at }}",
+            "event_subject": "={{ $json.event_subject }}",
+            "event_day": "={{ $json.event_day }}",
+            "intent_protected": "={{ $json.intent_protected }}",
+            "intent_label": "={{ $json.intent_label }}",
+            "intent_confidence": "={{ $json.intent_confidence }}",
+            "intent_reason": "={{ $json.intent_reason }}",
+            "ai_action": "={{ $json.ai_action }}",
+            "ai_confidence": "={{ $json.ai_confidence }}",
+            "ai_reason": "={{ $json.ai_reason }}",
+            "proposed_action": "={{ $json.proposed_action }}",
+            "human_final_action": "={{ $json.human_final_action }}",
+            "was_overridden": "={{ $json.was_overridden }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "logged_at",
+              "displayName": "logged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "date",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_subject",
+              "displayName": "event_subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_day",
+              "displayName": "event_day",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "intent_protected",
+              "displayName": "intent_protected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "intent_label",
+              "displayName": "intent_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "intent_confidence",
+              "displayName": "intent_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "intent_reason",
+              "displayName": "intent_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_action",
+              "displayName": "ai_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_confidence",
+              "displayName": "ai_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_reason",
+              "displayName": "ai_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "proposed_action",
+              "displayName": "proposed_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_final_action",
+              "displayName": "human_final_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "was_overridden",
+              "displayName": "was_overridden",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f3ba96d0-353c-4e52-b0a8-ae1959e6cecc",
+      "name": "Log to Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2944,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Emit one item per event the human wants to act on (cancel/decline/delete).\n// 'keep' events are skipped. If nothing is left to execute, emit a sentinel.\nconst cands = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst form = $('Review & Approve').first().json || {};\nconst out = [];\nfor (let i = 0; i < cands.length; i++) {\n  const e = cands[i].json;\n  const action = String(form['decision_' + i] || e.proposedAction).trim().toLowerCase();\n  if (action === 'cancel' || action === 'decline' || action === 'delete') {\n    out.push({ json: { id: e.id, action: action, subject: e.subject, hasExec: true } });\n  }\n}\nif (out.length === 0) return [{ json: { hasExec: false } }];\nreturn out;"
+      },
+      "id": "0262f678-dba5-4776-9854-87f3e992cd00",
+      "name": "Build Execution Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasExec",
+              "leftValue": "={{ $json.hasExec }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "af7f5551-28b4-4fb2-bd09-20458e183942",
+      "name": "Has Executables?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2944,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cancel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "decline",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Decline"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "delete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Delete"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "00b1a7cd-2f75-4a33-95d3-2ec8d078790a",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        3168,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/cancel",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\" }) }}",
+        "options": {}
+      },
+      "id": "38f977ff-ebd0-4c1e-b1fc-33204f06ac2e",
+      "name": "Cancel Meeting (Organizer)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3392,
+        0
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Meetings updated",
+        "completionMessage": "The confirmed meetings have been cancelled / declined / removed. You can close this window.",
+        "options": {}
+      },
+      "id": "1ba8077b-cd08-44e4-9a8e-4ffc8808fe45",
+      "name": "Done",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3616,
+        192
+      ],
+      "webhookId": "f5c99302-d1b6-4ee6-9ae8-3847016930f7"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/decline",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\", SendResponse: true }) }}",
+        "options": {}
+      },
+      "id": "312a71a6-29d3-4966-81ad-4eb4263b7669",
+      "name": "Decline Invitation (Attendee)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3392,
+        192
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "id": "b4f28cba-2993-44e1-ae78-9e4425455b34",
+      "name": "Remove From Calendar (No Response Possible)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3392,
+        384
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No changes made",
+        "completionMessage": "You kept all meetings unchanged. None of your meetings were changed.",
+        "options": {}
+      },
+      "id": "692b59a7-49dc-4b2d-a925-1b273199ae5b",
+      "name": "Nothing To Change",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3168,
+        400
+      ],
+      "webhookId": "3eaf2c44-60bd-4061-a5a7-91cb22635648"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No events for cancellation",
+        "completionMessage": "={{ $json.noEventsText }}",
+        "options": {}
+      },
+      "id": "d1a99307-300e-44b6-8dd6-2fd3b482defa",
+      "name": "No Events Found",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        2496,
+        400
+      ],
+      "webhookId": "2678aaac-bd70-40fb-b5dc-d0f45ab3dafe"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Build Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Range": {
+      "main": [
+        [
+          {
+            "node": "Get Events In Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Events In Range": {
+      "main": [
+        [
+          {
+            "node": "Prefilter Candidates (Deterministic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prefilter Candidates (Deterministic)": {
+      "main": [
+        [
+          {
+            "node": "AI Intent Protection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Intent Protection": {
+      "main": [
+        [
+          {
+            "node": "Apply Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model (Intent)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Intent Protection",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Intent Protection",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Intent": {
+      "main": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classify Event": {
+      "main": [
+        [
+          {
+            "node": "Classify Proposals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model (Action)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Proposals": {
+      "main": [
+        [
+          {
+            "node": "Build Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review": {
+      "main": [
+        [
+          {
+            "node": "Any Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Events?": {
+      "main": [
+        [
+          {
+            "node": "Review & Approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Events Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review & Approve": {
+      "main": [
+        [
+          {
+            "node": "Build Log Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Execution Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Log Rows": {
+      "main": [
+        [
+          {
+            "node": "Log to Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Items": {
+      "main": [
+        [
+          {
+            "node": "Has Executables?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Executables?": {
+      "main": [
+        [
+          {
+            "node": "Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing To Change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [
+          {
+            "node": "Cancel Meeting (Organizer)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decline Invitation (Attendee)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remove From Calendar (No Response Possible)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Meeting (Organizer)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decline Invitation (Attendee)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove From Calendar (No Response Possible)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "76a9a3eb-b245-46cf-9f73-041abc61d935",
+  "meta": {
+    "instanceId": "792ac69e0db152a47c045aebab14e32c2384c50a4f6a5336475232724fd088b6"
+  },
+  "nodeGroups": [],
+  "id": "eCGIsH1M0R2Os7C1",
+  "tags": []
+}

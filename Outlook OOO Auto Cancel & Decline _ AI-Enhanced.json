@@ -1,0 +1,882 @@
+{
+  "name": "Outlook OOO Auto Cancel & Decline | AI-Enhanced",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Out of Office — Cancel & Decline Meetings (AI-Enhanced)",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "First Day of Absence",
+              "fieldType": "date",
+              "fieldName": "firstDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Last Day of Absence",
+              "fieldType": "date",
+              "fieldName": "lastDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reason (will be added to the cancellation/decline email)",
+              "fieldName": "reason",
+              "placeholder": "e.g. on vacation, sick leave, business trip",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit",
+          "customCss": "button[type=\"submit\"]:disabled::after{content:\"Do not close this window. Outlook Events are loading.\";display:block;margin-top:12px;color:#c5221f;font-weight:600;font-size:0.9rem;}"
+        }
+      },
+      "id": "215dbbc9-eb47-449c-aeec-2da06650bb37",
+      "name": "On form submission",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        384
+      ],
+      "webhookId": "d4cd1448-8686-4996-8a96-919b84bb1313"
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $json.firstDay;\nconst last = $json.lastDay;\nreturn [{ json: {\n  rangeStart: first + 'T00:00:00',\n  rangeEnd: last + 'T23:59:59',\n  reason: $json.reason\n} }];"
+      },
+      "id": "cc98fb3a-ea6d-41f7-abac-899634bf50b2",
+      "name": "Build Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "includeRecurringInstances": true,
+        "startDateTime": "={{ $json.rangeStart }}",
+        "endDateTime": "={{ $json.rangeEnd }}",
+        "returnAll": true,
+        "output": "raw"
+      },
+      "id": "70bc6d27-494b-4869-b44e-414088d4a14f",
+      "name": "Get Events In Range",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        448,
+        384
+      ],
+      "alwaysOutputData": true,
+      "webhookId": "46a9f349-77a8-423c-b427-66004a197a47",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic pre-step: retrieval stays rule-based.\n// Drop cancelled + whitelisted events (hard override the AI can never overrule),\n// then emit one item per candidate event for the AI to decide on.\nconst events = $input.all();\nconst out = [];\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nfor (const it of events) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (isWhitelisted) continue;\n  const attendees = Array.isArray(e.attendees) ? e.attendees : [];\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  const isRecurring = !!e.recurrence || (e.type && e.type !== 'singleInstance');\n  out.push({ json: {\n    id: e.id,\n    subject: e.subject || '(no subject)',\n    isOrganizer: e.isOrganizer === true,\n    attendeeCount: attendees.length,\n    responseRequested: e.responseRequested === true,\n    isRecurring: !!isRecurring,\n    day: fmtDay(startRaw),\n    start: startRaw ? startRaw.replace('T', ' ').slice(0, 16) : 'unknown time'\n  } });\n}\nreturn out;"
+      },
+      "id": "f599208d-0be8-4bf3-a9a8-9e97ad82c6c5",
+      "name": "Prefilter Candidates (Deterministic)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Classify this single calendar event for an out-of-office period. Return json.\n\nEvent details:\nSubject: {{ $json.subject }}\nAm I the organizer: {{ $json.isOrganizer }}\nNumber of other attendees: {{ $json.attendeeCount }}\nA response to the invitation is requested: {{ $json.responseRequested }}\nRecurring / series event: {{ $json.isRecurring }}\nWhen: {{ $json.day }} {{ $json.start }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You decide what to do with a calendar event while the user is out of office. Choose exactly one action and return json with keys action, confidence (0..1) and reason.\n\nAllowed actions:\n- \"cancel\": the user ORGANIZES the meeting and there are attendees. Cancelling notifies everyone and removes it for all.\n- \"decline\": the user was INVITED (not organizer) and a response is requested. Declines with a note, meeting stays for others.\n- \"delete\": the user was invited, no response is expected/possible, but the entry should be removed from the user's own calendar only.\n- \"keep\": leave the event untouched. Use this as the SAFE fallback whenever you are unsure, when the event looks important to keep informed on (e.g. very large meetings, all-hands, town halls where the user is one of many), or when none of the other actions clearly fit.\n\nPrefer \"keep\" over guessing. Set confidence below 0.5 when uncertain; a low-confidence result will be treated as keep."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "eecc5bf6-858f-4557-b831-9fc82a403b07",
+      "name": "AI Classify Event",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        896,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "reasoningEffort": "low"
+        }
+      },
+      "id": "c6b8de72-60d5-4911-aa8a-dcda75770b0b",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        608
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "7vutZsA6LWMxH9Nl",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"action\":\"cancel\",\"confidence\":0.9,\"reason\":\"Short human-readable justification for the chosen action.\"}"
+      },
+      "id": "9900d0e9-f212-41d3-adcf-8351e4a7017f",
+      "name": "Decision Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apply the AI decision per event, with a deterministic fallback bucket.\n// Keep ALL candidates (including 'keep') so the human can review and override each one.\n// AI output items are paired by index with the candidate list.\nconst aiItems = $input.all();\nconst candidates = $('Prefilter Candidates (Deterministic)').all();\nconst out = [];\nfor (let i = 0; i < candidates.length; i++) {\n  const cand = (candidates[i] && candidates[i].json) || {};\n  if (!cand.id) continue;\n  const a = (aiItems[i] && aiItems[i].json) || {};\n  const parsed = a.output || a;\n  let action = String(parsed.action || '').trim().toLowerCase();\n  const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 1;\n  const destructive = (action === 'cancel' || action === 'decline' || action === 'delete');\n  // Fallback bucket: invalid action or low confidence -> keep (no destructive action)\n  if (!destructive || confidence < 0.5) action = 'keep';\n  out.push({ json: {\n    id: cand.id,\n    aiAction: action,\n    subject: cand.subject,\n    day: cand.day,\n    start: cand.start,\n    isOrganizer: cand.isOrganizer === true,\n    aiConfidence: confidence,\n    aiReason: String(parsed.reason || '')\n  } });\n}\nreturn out;"
+      },
+      "id": "ce96f903-465e-44b3-9fcb-69f7388c9f3b",
+      "name": "Classify Proposals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        384
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the dynamic per-event review form: one dropdown per candidate event,\n// pre-selected with the AI recommendation, overridable to cancel/decline/delete/keep.\nconst props = $input.all().filter(function (i) { return i.json && i.json.id; });\nconst rawEvents = $('Get Events In Range').all();\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nconst fmtTime = function (raw) {\n  if (!raw) return '';\n  return String(raw).slice(11, 16);\n};\n// Collect whitelisted (protected) meetings for the description text.\nconst whitelisted = [];\nfor (const it of rawEvents) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (!isWhitelisted) continue;\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  whitelisted.push({ day: fmtDay(startRaw), time: fmtTime(startRaw), subject: e.subject || '(no subject)' });\n}\n// Build one dropdown field per candidate event.\n// Role-based options: organizer can only cancel or keep;\n// an invitee can decline, delete (own calendar only) or keep.\nconst fields = [];\nfor (let i = 0; i < props.length; i++) {\n  const e = props[i].json;\n  const isOrganizer = e.isOrganizer === true;\n  const options = isOrganizer\n    ? [{ option: 'cancel' }, { option: 'keep' }]\n    : [{ option: 'decline' }, { option: 'delete' }, { option: 'keep' }];\n  const allowed = options.map(function (o) { return o.option; });\n  // Make sure the pre-selected value is actually offered for this role.\n  const defaultValue = allowed.indexOf(e.aiAction) !== -1 ? e.aiAction : 'keep';\n  const conf = Math.round((typeof e.aiConfidence === 'number' ? e.aiConfidence : 1) * 100);\n  let reason = String(e.aiReason || '');\n  if (reason.length > 140) reason = reason.slice(0, 137) + '...';\n  const role = isOrganizer ? 'organizer' : 'invited';\n  let label = e.day + ' — ' + e.subject + '  [' + role + ']  ▸ AI: ' + defaultValue + ' (' + conf + '%)';\n  if (reason) label += ' — ' + reason;\n  fields.push({ fieldLabel: label, fieldName: 'decision_' + i, fieldType: 'dropdown', fieldOptions: { values: options }, defaultValue: defaultValue, requiredField: true });\n}\n// Description: intro + whitelist list (HTML).\nlet desc = '<p>The AI proposed an action for each meeting below. Review each one and change it if needed, then confirm.</p>';\ndesc += '<p><b>' + whitelisted.length + '</b> whitelisted meeting(s) are protected and will NOT be changed';\nif (whitelisted.length > 0) {\n  desc += ':</p><div style=\"list-style:none;padding:0;margin:0;\">';\n  for (const w of whitelisted) { desc += '<div>' + w.day + ' — ' + w.subject + '</div>'; }\n  desc += '</div>';\n} else {\n  desc += '.</p>';\n}\n// 'No events' completion text (same layout as before).\nlet noEventsText = '';\nif (whitelisted.length === 0) {\n  noEventsText = 'No events were determined in the selected time frame.';\n} else {\n  noEventsText = whitelisted.length + ' determined meeting(s):\\n\\n';\n  const lines = [];\n  for (const w of whitelisted) { const when = w.time ? (w.day + ' ' + w.time) : w.day; lines.push(when + ' — ' + w.subject); }\n  noEventsText += lines.join('\\n');\n}\nnoEventsText += '\\n\\nYou can close this window.';\nreturn [{ json: { formFieldsJson: JSON.stringify(fields), reviewDescriptionHtml: desc, noEventsText: noEventsText, count: props.length, whitelistedCount: whitelisted.length } }];"
+      },
+      "id": "7def4532-6a0e-4f34-911e-470324dabad8",
+      "name": "Build Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        384
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasEvents",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f3b5dcfd-563d-4dd6-8bcf-b93fe0256e45",
+      "name": "Any Events?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1696,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.parse($json.formFieldsJson) }}",
+        "options": {
+          "formTitle": "Review AI-determined events",
+          "formDescription": "={{ $json.reviewDescriptionHtml }}",
+          "buttonLabel": "Confirm decisions",
+          "customCss": ".container{max-width:min(80vw,1100px) !important;width:80vw !important;}.card{max-width:min(80vw,1100px) !important;width:80vw !important;}"
+        }
+      },
+      "id": "875fee68-2608-4d0a-bc9a-4ddb589f85cb",
+      "name": "Review & Approve",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        288
+      ],
+      "webhookId": "3efc02aa-eb68-4916-8a8f-2b0750d26bc8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One log row per candidate event: AI decision vs. human final decision.\nconst cands = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst form = $('Review & Approve').first().json || {};\nconst runId = String($execution.id);\nconst now = new Date().toISOString();\nconst out = [];\nfor (let i = 0; i < cands.length; i++) {\n  const e = cands[i].json;\n  let human = String(form['decision_' + i] || e.aiAction).trim().toLowerCase();\n  const overridden = human !== e.aiAction;\n  out.push({ json: {\n    run_id: runId,\n    logged_at: now,\n    event_subject: e.subject,\n    event_day: e.day,\n    ai_action: e.aiAction,\n    ai_confidence: (typeof e.aiConfidence === 'number' ? e.aiConfidence : 1),\n    ai_reason: e.aiReason,\n    human_final_action: human,\n    was_overridden: overridden\n  } });\n}\nreturn out;"
+      },
+      "id": "fc3bb946-031b-488f-8eaf-59b70c27a54a",
+      "name": "Build Log Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "0DnqCPznBjhZEmdY",
+          "cachedResultName": "OOO AI Decision Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "value": {
+            "run_id": "={{ $json.run_id }}",
+            "logged_at": "={{ $json.logged_at }}",
+            "event_subject": "={{ $json.event_subject }}",
+            "event_day": "={{ $json.event_day }}",
+            "ai_action": "={{ $json.ai_action }}",
+            "ai_confidence": "={{ $json.ai_confidence }}",
+            "ai_reason": "={{ $json.ai_reason }}",
+            "human_final_action": "={{ $json.human_final_action }}",
+            "was_overridden": "={{ $json.was_overridden }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "logged_at",
+              "displayName": "logged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "date",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_subject",
+              "displayName": "event_subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_day",
+              "displayName": "event_day",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_action",
+              "displayName": "ai_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_confidence",
+              "displayName": "ai_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_reason",
+              "displayName": "ai_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_final_action",
+              "displayName": "human_final_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "was_overridden",
+              "displayName": "was_overridden",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4be58c27-bed3-4c95-938e-c1daab49682b",
+      "name": "Log to Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2368,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Emit one item per event the human wants to act on (cancel/decline/delete).\n// 'keep' events are skipped. If nothing is left to execute, emit a sentinel.\nconst cands = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst form = $('Review & Approve').first().json || {};\nconst out = [];\nfor (let i = 0; i < cands.length; i++) {\n  const e = cands[i].json;\n  const action = String(form['decision_' + i] || e.aiAction).trim().toLowerCase();\n  if (action === 'cancel' || action === 'decline' || action === 'delete') {\n    out.push({ json: { id: e.id, action: action, subject: e.subject, hasExec: true } });\n  }\n}\nif (out.length === 0) return [{ json: { hasExec: false } }];\nreturn out;"
+      },
+      "id": "8d85b5ee-ca2a-41bc-86f4-8f85a76fb15e",
+      "name": "Build Execution Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasExec",
+              "leftValue": "={{ $json.hasExec }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dd73fa4b-6d99-4e5b-9661-bc1e17764c66",
+      "name": "Has Executables?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2368,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cancel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "decline",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Decline"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "delete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Delete"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "c15543ea-b082-4893-92c8-414c558a13e4",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2592,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/cancel",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\" }) }}",
+        "options": {}
+      },
+      "id": "611de70a-9542-4ab9-ad89-eac7d60b2a15",
+      "name": "Cancel Meeting (Organizer)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2816,
+        0
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Meetings updated",
+        "completionMessage": "The confirmed meetings have been cancelled / declined / removed. You can close this window.",
+        "options": {}
+      },
+      "id": "99140f96-4e54-4d27-a6f4-2a4196e58342",
+      "name": "Done",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3040,
+        192
+      ],
+      "webhookId": "ead1cdc9-0585-4401-a4a4-31a6e47c1c26"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/decline",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\", SendResponse: true }) }}",
+        "options": {}
+      },
+      "id": "6b77a33a-e66f-47c5-b5a7-2b2bf14843f2",
+      "name": "Decline Invitation (Attendee)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2816,
+        192
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "id": "6627bd0d-6448-4baf-b2b3-80a70b7e0b08",
+      "name": "Remove From Calendar (No Response Possible)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2816,
+        384
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No changes made",
+        "completionMessage": "You kept all meetings unchanged. None of your meetings were changed.",
+        "options": {}
+      },
+      "id": "caa95316-33b6-4205-aaea-9c971d02e76f",
+      "name": "Nothing To Change",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        2592,
+        480
+      ],
+      "webhookId": "ebbbcda0-a3fc-409c-9662-be999156ef6e"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No events for cancellation",
+        "completionMessage": "={{ $json.noEventsText }}",
+        "options": {}
+      },
+      "id": "5e9a2758-d605-4dbe-b9aa-e15094f703d1",
+      "name": "No Events Found",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        480
+      ],
+      "webhookId": "49ef082b-4e1c-4ace-b4de-c406ab870419"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Build Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Range": {
+      "main": [
+        [
+          {
+            "node": "Get Events In Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Events In Range": {
+      "main": [
+        [
+          {
+            "node": "Prefilter Candidates (Deterministic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prefilter Candidates (Deterministic)": {
+      "main": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classify Event": {
+      "main": [
+        [
+          {
+            "node": "Classify Proposals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Classify Event",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Proposals": {
+      "main": [
+        [
+          {
+            "node": "Build Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review": {
+      "main": [
+        [
+          {
+            "node": "Any Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Events?": {
+      "main": [
+        [
+          {
+            "node": "Review & Approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Events Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review & Approve": {
+      "main": [
+        [
+          {
+            "node": "Build Log Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Execution Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Log Rows": {
+      "main": [
+        [
+          {
+            "node": "Log to Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Items": {
+      "main": [
+        [
+          {
+            "node": "Has Executables?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Executables?": {
+      "main": [
+        [
+          {
+            "node": "Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing To Change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [
+          {
+            "node": "Cancel Meeting (Organizer)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decline Invitation (Attendee)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remove From Calendar (No Response Possible)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Meeting (Organizer)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decline Invitation (Attendee)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove From Calendar (No Response Possible)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "59819199-88b7-4e97-9183-27b1300b61d3",
+  "meta": {
+    "instanceId": "792ac69e0db152a47c045aebab14e32c2384c50a4f6a5336475232724fd088b6"
+  },
+  "nodeGroups": [],
+  "id": "95gOPMYPKHVzfDYd",
+  "tags": []
+}

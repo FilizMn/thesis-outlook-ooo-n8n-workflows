@@ -1,0 +1,758 @@
+{
+  "name": "Outlook OOO Auto Cancel & Decline | Deterministic",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Out of Office — Cancel & Decline Meetings",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "First Day of Absence",
+              "fieldType": "date",
+              "fieldName": "firstDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Last Day of Absence",
+              "fieldType": "date",
+              "fieldName": "lastDay",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reason (will be added to the cancellation/decline email)",
+              "fieldName": "reason",
+              "placeholder": "e.g. on vacation, sick leave, business trip",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Submit",
+          "customCss": "button[type=\"submit\"]:disabled::after{content:\"Do not close this window. Outlook Events are loading.\";display:block;margin-top:12px;color:#c5221f;font-weight:600;font-size:0.9rem;}"
+        }
+      },
+      "id": "b940108a-d126-4f26-9073-15b8e4ef0c07",
+      "name": "On form submission",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        624
+      ],
+      "webhookId": "6fc2cfc8-a31d-4581-828c-7599af0913ce"
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $json.firstDay;\nconst last = $json.lastDay;\nreturn [{ json: {\n  rangeStart: first + 'T00:00:00',\n  rangeEnd: last + 'T23:59:59',\n  reason: $json.reason\n} }];"
+      },
+      "id": "dcc68092-4283-4790-b433-82b5e8d8decd",
+      "name": "Build Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -672,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "includeRecurringInstances": true,
+        "startDateTime": "={{ $json.rangeStart }}",
+        "endDateTime": "={{ $json.rangeEnd }}",
+        "returnAll": true,
+        "output": "raw"
+      },
+      "id": "8e7a7fc8-4208-4025-9df4-e3eec48c3d66",
+      "name": "Get Events In Range",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        576
+      ],
+      "alwaysOutputData": true,
+      "webhookId": "31661068-8a32-45e7-8134-664532cbd510",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = $input.all();\nconst out = [];\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nfor (const it of events) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (isWhitelisted) continue;\n  const attendees = Array.isArray(e.attendees) ? e.attendees : [];\n  const hasAttendees = attendees.length > 0;\n  let action = null;\n  if (e.isOrganizer === true && hasAttendees) action = 'cancel';\n  else if (e.isOrganizer === false && e.responseRequested === true) action = 'decline';\n  else if (e.isOrganizer === false && e.responseRequested === false && hasAttendees) action = 'delete';\n  if (!action) continue;\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  out.push({ json: {\n    id: e.id,\n    action: action,\n    subject: e.subject || '(no subject)',\n    day: fmtDay(startRaw),\n    start: startRaw ? startRaw.replace('T', ' ').slice(0, 16) : 'unknown time'\n  } });\n}\nreturn out;"
+      },
+      "id": "432a3ea3-6da7-4c5e-8cf9-7479e1921d4c",
+      "name": "Classify Proposals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        576
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const proposals = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst rawEvents = $('Get Events In Range').all();\nconst fmtDay = function (raw) {\n  if (!raw) return 'unknown date';\n  const d = String(raw).slice(0, 10);\n  const parts = d.split('-');\n  if (parts.length !== 3) return d;\n  return parts[2] + '.' + parts[1] + '.' + parts[0];\n};\nconst fmtTime = function (raw) {\n  if (!raw) return '';\n  const t = String(raw).slice(11, 16);\n  return t;\n};\n// Collect whitelisted (protected) meetings from the raw Outlook output\nconst whitelisted = [];\nfor (const it of rawEvents) {\n  const e = it.json || {};\n  if (!e.id) continue;\n  if (e.isCancelled === true) continue;\n  const categories = Array.isArray(e.categories) ? e.categories : [];\n  const isWhitelisted = categories.some(function (c) { return String(c).trim().toLowerCase() === 'whitelist'; });\n  if (!isWhitelisted) continue;\n  const startRaw = (e.start && e.start.dateTime) ? e.start.dateTime : '';\n  whitelisted.push({ day: fmtDay(startRaw), time: fmtTime(startRaw), subject: e.subject || '(no subject)' });\n}\nlet html = '';\nif (proposals.length === 0 && whitelisted.length === 0) {\n  html = '<p>No events were found in the selected time frame.</p>';\n} else {\n  html = '<p><b>' + proposals.length + '</b> meeting(s) proposed for cancellation / decline:</p>';\n  if (proposals.length > 0) {\n    html += '<div style=\"list-style:none;padding:0;margin:0;\">';\n    for (const it of proposals) {\n      const e = it.json;\n      html += '<div>' + e.day + ' — ' + e.subject + '</div>';\n    }\n    html += '</div>';\n  } else {\n    html += '<p><i>None.</i></p>';\n  }\n  html += '<p><b>' + whitelisted.length + '</b> whitelisted meeting(s) determined (will NOT be changed):</p>';\n  if (whitelisted.length > 0) {\n    html += '<div style=\"list-style:none;padding:0;margin:0;\">';\n    for (const w of whitelisted) {\n      html += '<div>' + w.day + ' — ' + w.subject + '</div>';\n    }\n    html += '</div>';\n  } else {\n    html += '<p><i>None.</i></p>';\n  }\n}\n// Build the \"no events for cancellation\" completion message in the same layout as\n// the review page: list the determined meetings with date and time, then the close hint.\nlet noEventsText = '';\nif (whitelisted.length === 0) {\n  noEventsText = 'No events were determined in the selected time frame.';\n} else {\n  noEventsText = whitelisted.length + ' determined meeting(s):\\n\\n';\n  const lines = [];\n  for (const w of whitelisted) {\n    const when = w.time ? (w.day + ' ' + w.time) : w.day;\n    lines.push(when + ' — ' + w.subject);\n  }\n  noEventsText += lines.join('\\n');\n}\nnoEventsText += '\\n\\nYou can close this window.';\nreturn [{ json: { reviewHtml: html, noEventsText: noEventsText, count: proposals.length, whitelistedCount: whitelisted.length } }];"
+      },
+      "id": "4177a880-5a52-4d17-ab6b-8045e6fed86d",
+      "name": "Build Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        816
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasEvents",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a943361f-647c-47cd-a817-34bf82af273a",
+      "name": "Any Events?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "radio",
+              "fieldName": "decision",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Accept — cancel / decline all listed meetings"
+                  },
+                  {
+                    "option": "Decline — keep everything unchanged"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Review determined events",
+          "formDescription": "={{ $json.reviewHtml }}",
+          "buttonLabel": "Confirm decision",
+          "customCss": ".container{max-width:min(80vw,1100px) !important;width:80vw !important;}.card{max-width:min(80vw,1100px) !important;width:80vw !important;} .form-group:has(input[value^=\"Accept\"]) label{color:#137333;font-weight:600;} .form-group:has(input[value^=\"Decline\"]) label{color:#c5221f;font-weight:600;} label:has(input[value^=\"Accept\"]){color:#137333;font-weight:600;} label:has(input[value^=\"Decline\"]){color:#c5221f;font-weight:600;}"
+        }
+      },
+      "id": "d2ee3c49-9773-4baa-b402-7b1e95af790d",
+      "name": "Review & Approve",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        576
+      ],
+      "webhookId": "e4dfbc1b-5366-4bdf-a83b-e691d7c76482"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One log row per determined event: deterministic rule action vs. human overall decision.\nconst props = $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });\nconst decision = String((($('Review & Approve').first() || {}).json || {}).decision || '');\nconst accepted = decision.indexOf('Accept') === 0;\nconst runId = String($execution.id);\nconst now = new Date().toISOString();\nconst out = [];\nfor (const it of props) {\n  const e = it.json;\n  out.push({ json: {\n    run_id: runId,\n    logged_at: now,\n    event_subject: e.subject,\n    event_day: e.day,\n    rule_action: e.action,\n    human_decision: accepted ? 'Accept' : 'Decline',\n    final_action: accepted ? e.action : 'keep'\n  } });\n}\nreturn out;"
+      },
+      "id": "6d6fc520-cb19-493d-b093-4fd11efec18e",
+      "name": "Build Log Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "fbddPEerO5Uyf077",
+          "cachedResultName": "OOO Deterministic Decision Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "value": {
+            "run_id": "={{ $json.run_id }}",
+            "logged_at": "={{ $json.logged_at }}",
+            "event_subject": "={{ $json.event_subject }}",
+            "event_day": "={{ $json.event_day }}",
+            "rule_action": "={{ $json.rule_action }}",
+            "human_decision": "={{ $json.human_decision }}",
+            "final_action": "={{ $json.final_action }}"
+          },
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "logged_at",
+              "displayName": "logged_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "date",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_subject",
+              "displayName": "event_subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_day",
+              "displayName": "event_day",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rule_action",
+              "displayName": "rule_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_decision",
+              "displayName": "human_decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "final_action",
+              "displayName": "final_action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0dcf4fda-91e1-429a-818c-e1b117af0859",
+      "name": "Log to Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "approved",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "Accept",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "de5c98dd-f7e3-429c-829a-6b8d7d5e1b19",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        448,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Classify Proposals').all().filter(function (i) { return i.json && i.json.id; });"
+      },
+      "id": "33537550-2eba-4a73-ae47-5c402b78071f",
+      "name": "Load Approved Proposals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "cancel",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Cancel"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "decline",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Decline"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "delete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Delete"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "589fe61a-b638-49e9-b4be-c37838ba875c",
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        896,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/cancel",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\" }) }}",
+        "options": {}
+      },
+      "id": "9d3d1a8c-5cde-4bc1-8a29-259ea29e90f8",
+      "name": "Cancel Meeting (Organizer)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        288
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Meetings updated",
+        "completionMessage": "The approved meetings have been cancelled / declined. You can close this window.",
+        "options": {}
+      },
+      "id": "1e0bee8f-8e2e-46d0-9524-54a6119b4d5b",
+      "name": "Done",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1344,
+        384
+      ],
+      "webhookId": "e4df7682-215a-4776-b386-8fff1f76c181"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}/decline",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ Comment: \"I am currently out of office (\" + $('On form submission').first().json.reason + \") and will not be able to attend. Apologies for any inconvenience.\\n\\n*This email was sent automatically via n8n Workflows.*\", SendResponse: true }) }}",
+        "options": {}
+      },
+      "id": "167279a4-98a0-45d0-94e5-bee4262102ad",
+      "name": "Decline Invitation (Attendee)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        480
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://graph.microsoft.com/v1.0/me/events/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {}
+      },
+      "id": "94ae40d7-01be-4b85-bfe4-ea9de469fd5e",
+      "name": "Remove From Calendar (No Response Possible)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        672
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "c01S9Xx09EDVcRtT",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No changes made",
+        "completionMessage": "You declined the proposal. None of your meetings were changed.",
+        "options": {}
+      },
+      "id": "1c338fb3-a7ec-412a-8b4e-ddf80d3daefa",
+      "name": "Aborted (No Changes)",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        672,
+        672
+      ],
+      "webhookId": "3bedc27a-16fe-492d-8939-70a6ab12cc89"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No events for cancellation",
+        "completionMessage": "={{ $json.noEventsText }}",
+        "options": {}
+      },
+      "id": "6bbe02d6-f22b-46f1-81f0-c5cdde22607f",
+      "name": "No Events Found",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        768
+      ],
+      "webhookId": "bbdb6755-b55b-47cd-a74a-40e0642254ae"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Build Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Range": {
+      "main": [
+        [
+          {
+            "node": "Get Events In Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Events In Range": {
+      "main": [
+        [
+          {
+            "node": "Classify Proposals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Proposals": {
+      "main": [
+        [
+          {
+            "node": "Build Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review": {
+      "main": [
+        [
+          {
+            "node": "Any Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Events?": {
+      "main": [
+        [
+          {
+            "node": "Review & Approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Events Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review & Approve": {
+      "main": [
+        [
+          {
+            "node": "Build Log Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Log Rows": {
+      "main": [
+        [
+          {
+            "node": "Log to Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Load Approved Proposals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aborted (No Changes)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Approved Proposals": {
+      "main": [
+        [
+          {
+            "node": "Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [
+          {
+            "node": "Cancel Meeting (Organizer)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decline Invitation (Attendee)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remove From Calendar (No Response Possible)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Meeting (Organizer)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decline Invitation (Attendee)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove From Calendar (No Response Possible)": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "5ab6116c-fd18-41d6-a5b9-74394fda9880",
+  "meta": {
+    "instanceId": "792ac69e0db152a47c045aebab14e32c2384c50a4f6a5336475232724fd088b6"
+  },
+  "nodeGroups": [],
+  "id": "aHoYrJLmwqB6gjlD",
+  "tags": []
+}
