@@ -4,22 +4,22 @@
 Each meeting is designed to trigger a specific expected action. This makes it
 possible to check whether the deterministic and the AI-enhanced workflows decide
 identically or sensibly.
+| #  | Day / Time (CEST) | Title                          | Organizer / Attendee | Attendees | Response requested? | Recurring?   | Whitelisted? | V1 (deterministic, actual) | Acceptable outcome(s) | What it demonstrates                                              |
+|----|-------------------|--------------------------------|----------------------|-----------|---------------------|--------------|--------------|----------------------------|-----------------------|------------------------------------------------------------------|
+| A1 | Mon 09:00         | Weekly Team Sync               | Organizer            | 8         | –                   | Yes (weekly) | no           | cancel                     | cancel                | Control: clear organizer cancel                                  |
+| A2 | Tue 10:00         | Sprint Planning                | Attendee             | 6         | Yes                 | No           | no           | decline                    | decline               | Control: clear invitee decline                                   |
+| B1 | Wed 09:30         | Board Meeting                  | Attendee             | 6         | Yes                 | No           | yes          | keep                       | keep                  | Hard whitelist override (invitee), AI never reached              |
+| B2 | Fri 09:00         | Client Kickoff (you host)      | Organizer            | 5         | –                   | No           | yes          | keep                       | keep                  | Whitelist override dominates even an organizer-cancel case       |
+| C1 | Mon 14:00         | Focus Time (Deep Work)         | Organizer            | 0         | –                   | No           | no           | skipped (no proposal)      | keep                  | Coverage gap: V1 skips personal blockers, AI surfaces them       |
+| C2 | Wed 17:00         | Dentist appointment            | Organizer            | 0         | –                   | No           | no           | skipped (no proposal)      | keep                  | Same as C1, second data point                                    |
+| D1 | Tue 16:00         | Sync                           | Attendee             | 2         | –                   | No           | no           | delete                     | keep or delete        | Ambiguous case: both outcomes acceptable; tests run-to-run variance |
+| D2 | Thu 14:00         | Catch-up                       | Organizer            | 1         | –                   | No           | no           | cancel                     | keep or cancel        | Ambiguous case for intent protection; may flip between runs      |
+| E1 | Mon 11:00         | 1:1 with Sarah (Supervisor)    | Organizer            | 1         | –                   | No           | no           | cancel                     | keep                  | Flagship: career-relevant 1:1 should be protected (only V3 can)  |
+| E2 | Wed 13:00         | Career Development / Mentoring | Attendee             | 2         | Yes                 | No           | no           | decline                    | keep                  | Relationship value should be preserved                          |
+| E3 | Tue 15:00         | Quarterly All-Hands            | Attendee             | 50        | –                   | No           | no           | delete                     | keep                  | Info value should be preserved, not deleted                     |
+| E4 | Thu 10:00         | Strategy Workshop (you present)| Organizer            | 12        | –                   | No           | no           | cancel                     | keep                  | Active contribution should be recognized                        |
+| E5 | Fri 12:00         | Lunch & Learn                  | Attendee             | 20        | –                   | No           | no           | delete                     | keep or delete        | Borderline intent-confidence; protection may trigger or not      |
 
-| # | Day / Time (CEST) | Title | **Organizer / Attendee** | Attendees | Response requested? | Recurring? | Whitelisted? | V1 Deterministic | V2 AI-Enhanced | V3 AI Intent-Protected | What it demonstrates |
-|---|-------------------|-------|--------------------------|-----------|---------------------|------------|--------------|------------------|----------------|------------------------|----------------------|
-| A1 | Mon 09:00 | Weekly Team Sync | **Organizer** | 8 | – | Yes (weekly) | not whitelisted | cancel | cancel | cancel | Control: all three agree (clear organizer cancel) |
-| A2 | Tue 10:00 | Sprint Planning | **Attendee** | 6 | Yes | No | not whitelisted | decline | decline | decline | Control: clear invitee decline |
-| B1 | Wed 09:30 | Board Meeting | **Attendee** | 6 | Yes | No | **whitelisted** | keep | keep | keep | Control: hard whitelist override on an invitee event, identical in all three (AI never reached) |
-| B2 | Fri 09:00 | Client Kickoff (you host) | **Organizer** | 5 | – | No | **whitelisted** | keep | keep | keep | Second whitelist case: hard override wins even on an organizer event that would otherwise be cancelled — shows the override dominates a different role/action |
-| C1 | Mon 14:00 | Focus Time (Deep Work) | **Organizer** | 0 | – | No | not whitelisted | skipped (no proposal) | surfaced → keep | surfaced → keep | Coverage gap: V1 silently ignores personal blockers, AI surfaces them |
-| C2 | Wed 17:00 | Dentist appointment | **Organizer** | 0 | – | No | not whitelisted | skipped (no proposal) | surfaced → keep | surfaced → keep | Same as C1, second data point |
-| E1 | Mon 11:00 | 1:1 with Sarah (Supervisor) | **Organizer** | 1 (Supervisor) | – | No | not whitelisted | cancel | cancel | **keep** (relationship_career / active_contribution) | Flagship discriminator: only V3 protects the career-relevant 1:1 |
-| E2 | Wed 13:00 | Career Development / Mentoring | **Attendee** | 2 | Yes | No | not whitelisted | decline | decline | **keep** (relationship_career) | V3 preserves relationship value that V1/V2 decline |
-| E3 | Tue 15:00 | Quarterly All-Hands | **Attendee** | 50 | – | No | not whitelisted | delete (from own calendar!) | keep / delete | **keep** (stay_informed) | V1 destroys info value (delete); V3 preserves it |
-| E4 | Thu 10:00 | Strategy Workshop (you present) | **Organizer** | 12 | – | No | not whitelisted | cancel | cancel | **keep** (active_contribution) | V3 recognizes active contribution; V1/V2 cancel |
-| D1 | Tue 16:00 | Sync | **Attendee** | 2 | – | No | not whitelisted | delete | keep *or* delete | keep *or* delete | Threshold case: confidence near 0.5 → <0.5→keep fallback; non-determinism across repeated runs |
-| D2 | Thu 14:00 | Catch-up | **Organizer** | 1 | – | No | not whitelisted | cancel | cancel | keep *or* cancel | Threshold case for intent protection in V3 (may flip between runs) |
-| E5 | Fri 12:00 | Lunch & Learn | **Attendee** | 20 | – | No | not whitelisted | delete | keep / delete | keep *or* delete (stay_informed borderline) | Intent-confidence threshold: just above/below 0.5 → protection triggers or not |
 
 **Note on the "Whitelist" category:** In Outlook, create a category named
 `Whitelist` and assign it to the relevant meeting. Such meetings are always
