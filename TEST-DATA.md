@@ -22,8 +22,11 @@ identically or sensibly.
 | E5 | Fri 15:00 | Cancelled Workshop | Invitee | 3 | no | no | no | keep (excluded) | keep (excluded) |
 
 **Note on the "Whitelist" category:** In Outlook, create a category named
-`Whitelist` and assign it to the relevant meeting. Such meetings are always
-protected by both workflows.
+`Whitelist` and assign it to the relevant meeting. The category match is
+case-insensitive and ignores surrounding whitespace, but only the exact word
+`whitelist` is recognised (variants such as `whitelisted` do not match). Meetings
+carrying this category are excluded before classification and are therefore always
+left unchanged.
 
 **Note on recurring meetings:** Outlook categories (e.g. "Whitelist") apply to the
 entire series. Within a period, either all occurrences are protected or none — a
@@ -45,7 +48,7 @@ Only reserved addresses of the `example.com` domain (RFC 2606) are used, so that
 **no real people** are contacted.
 
 ```
-max.mustermann@example.com, erika.musterfrau@example.com, john.doe@example.com, jane.smith@example.com, hans.mueller@example.com, anna.schmidt@example.com, peter.fischer@example.com, sabine.weber@example.com, michael.meyer@example.com, julia.wagner@example.com, david.brown@example.com, sarah.miller@example.com, james.wilson@example.com, emily.taylor@example.com, robert.thomas@example.com, jessica.white@example.com, daniel.martin@example.com, laura.anderson@example.com, thomas.jackson@example.com, lisa.thompson@example.com, christian.becker@example.com, nicole.hoffmann@example.com, stefan.schaefer@example.com, melanie.koch@example.com, alexander.bauer@example.com, christina.richter@example.com, martin.klein@example.com, nadine.wolf@example.com, andreas.schroeder@example.com, tanja.neumann@example.com, matthias.schwarz@example.com, sandra.braun@example.com, jan.kruger@example.com, vanessa.hofmann@example.com, markus.hartmann@example.com, anita.lange@example.com, juergen.schmitt@example.com, petra.werner@example.com, frank.schmitz@example.com, sonja.krause@example.com, stefanie.meier@example.com, oliver.lehmann@example.com, kerstin.schmid@example.com, torsten.mueller@example.com, daniela.koenig@example.com, rene.germann@example.com, manuela.walter@example.com, patrick.kaiser@example.com, claudia.fuchs@example.com, sebastian.weber@example.com
+max.mustermann@example.com; erika.musterfrau@example.com; john.doe@example.com; jane.smith@example.com; hans.mueller@example.com; anna.schmidt@example.com; peter.fischer@example.com; sabine.weber@example.com; michael.meyer@example.com; julia.wagner@example.com; david.brown@example.com; sarah.miller@example.com; james.wilson@example.com; emily.taylor@example.com; robert.thomas@example.com; jessica.white@example.com; daniel.martin@example.com; laura.anderson@example.com; thomas.jackson@example.com; lisa.thompson@example.com; christian.becker@example.com; nicole.hoffmann@example.com; stefan.schaefer@example.com; melanie.koch@example.com; alexander.bauer@example.com; christina.richter@example.com; martin.klein@example.com; nadine.wolf@example.com; andreas.schroeder@example.com; tanja.neumann@example.com; matthias.schwarz@example.com; sandra.braun@example.com; jan.kruger@example.com; vanessa.hofmann@example.com; markus.hartmann@example.com; anita.lange@example.com; juergen.schmitt@example.com; petra.werner@example.com; frank.schmitz@example.com; sonja.krause@example.com; stefanie.meier@example.com; oliver.lehmann@example.com; kerstin.schmid@example.com; torsten.mueller@example.com; daniela.koenig@example.com; rene.germann@example.com; manuela.walter@example.com; patrick.kaiser@example.com; claudia.fuchs@example.com; sebastian.weber@example.com
 ```
 
 # Automated seeding approach failed
