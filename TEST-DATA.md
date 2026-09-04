@@ -21,6 +21,7 @@ identically or sensibly.
 | E4 | Fri 11:00 | Client Demo (you present) | Invitee | 4 | yes | no | no | decline | keep |
 | E5 | Fri 15:00 | Cancelled Workshop | Invitee | 3 | no | no | no | keep (excluded) | keep (excluded) |
 
+**Note on "Attendees" category:"" Attendees is the value of attendees.length from Microsoft Graph. The organiser is never part of this array, so the organiser is not counted. For your own organised meetings the number therefore excludes you; for meetings you were invited to it includes you but not the organiser.
 **Note on the "Whitelist" category:** In Outlook, create a category named
 `Whitelist` and assign it to the relevant meeting. The category match is
 case-insensitive and ignores surrounding whitespace, but only the exact word
