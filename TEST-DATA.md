@@ -9,16 +9,16 @@ identically or sensibly.
 |----|----------|-------|------|-----------|------------|-----------|-------------|--------------------|-----------------------|
 | A1 | Mon 09:00 | Team Sync | Organizer | 3 | yes | no | no | cancel | cancel |
 | A2 | Mon 14:00 | Project Kickoff | Organizer | 5 | yes | no | no | cancel | cancel |
-| B1 | Tue 10:00 | Budget Review | Invitee | 4 | yes | no | no | decline | decline |
-| B2 | Tue 15:00 | Cross-Team Planning | Invitee | 12 | yes | no | no | decline | decline |
+| B1 | Tue 10:00 | Budget Review | Invitee | 5 | yes | no | no | decline | decline |
+| B2 | Tue 15:00 | Cross-Team Planning | Invitee | 13 | yes | no | no | decline | decline |
 | C1 | Wed 09:15 | Daily Standup | Invitee | 6 | yes | yes | yes | keep | keep |
 | C2 | Wed 11:00 | Weekly All-Hands | Invitee | 40 | yes | yes | yes | keep | keep |
-| D1 | Wed 16:00 | Sync (tbd) | Invitee | 3 | yes | no | no | decline | decline / keep |
-| D2 | Thu 09:30 | Quick Catch-up | Invitee | 2 | no | no | no | delete | delete / keep |
+| D1 | Wed 16:00 | Weekly (tbd) | Invitee | 4 | yes | no | no | decline | decline / keep |
+| D2 | Thu 09:30 | Quick Catch-up | Invitee | 3 | no | no | no | delete | delete / keep |
 | E1 | Thu 11:00 | Review with Prof. (Supervisor) | Organizer | 2 | yes | no | no | cancel | keep |
 | E2 | Thu 14:00 | Focus Time (self) | Organizer | 0 | no | no | no | keep | keep |
-| E3 | Fri 09:00 | Company Town Hall | Invitee | 50 | no | no | no | delete | keep |
-| E4 | Fri 11:00 | Client Demo (you present) | Invitee | 4 | yes | no | no | decline | keep |
+| E3 | Fri 09:00 | Company Town Hall | Invitee | 51 | no | no | no | delete | keep |
+| E4 | Fri 11:00 | Client Demo (you present) | Invitee | 5 | yes | no | no | decline | keep |
 | E5 | Fri 15:00 | Cancelled Workshop | Invitee | 3 | yes | no | no | keep (excluded) | keep (excluded) |
 | E6 | Fri 16:00 | Board Preparation Meeting | Organizer | 6 | yes | no | no | cancel | cancel |
 
