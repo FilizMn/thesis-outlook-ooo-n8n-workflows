@@ -176,10 +176,40 @@ test addresses (freely extendable), the expected action for each test meeting, a
 a note on why an automated calendar-seeding approach was abandoned in favour of
 creating the test appointments manually.
 
-To keep the three workflows comparable, run all of them against the **same calendar
-state**: because each run actually cancels/declines/deletes meetings, recreate (or
-restore) the test events before running the next workflow, so every variant starts
-from identical input.
+To keep the three workflows comparable, all variants are run against the **same
+calendar state**. Because every meeting is left on **keep** at the review step, no
+meeting is actually cancelled, declined or deleted during the evaluation runs, so
+the same test events can be reused across all variants and all repeated runs
+without re-creating them.
+
+## Evaluation results (decision logs)
+
+The recorded decision logs from the evaluation runs are provided as CSV files in
+this repository:
+
+- [`v1_deterministic_log.csv`](./v1_deterministic_log.csv) — 1 run, 10 rows
+- [`v2_ai_enhanced_log.csv`](./v2_ai_enhanced_log.csv) — 5 runs, 55 rows
+- [`v3_intent_protected_log.csv`](./v3_intent_protected_log.csv) — 10 runs, 110 rows
+
+Each row corresponds to one candidate meeting in one run; runs are distinguished
+by `run_id`. The deterministic variant is run once because its output is
+reproducible, whereas the AI variants are run multiple times so that the
+run-to-run variation of the model decisions can be observed. The AI
+Intent-Protected variant is run more often than the AI-Enhanced variant because
+its two AI stages introduce an additional source of variation.
+
+Two points are important when reading the logs:
+
+- **Excluded meetings do not appear.** Hard-whitelisted meetings and
+  already-cancelled meetings are filtered out before classification, so each run
+  logs the remaining candidate meetings rather than the full test set.
+- **The final action is constant.** During the evaluation, every meeting was left
+  on **keep** at the review step so that no calendar changes were executed and the
+  same calendar state could be reused across all runs. The evaluation therefore
+  compares the system's *proposed* action (`rule_action` / `ai_action` /
+  `proposed_action`, together with the intent fields in the Intent-Protected
+  variant) against the acceptable outcomes defined in
+  [`TEST-DATA.md`](./TEST-DATA.md), not the logged `human_final_action`.
 
 ## Security note
 
