@@ -7,40 +7,27 @@ identically or sensibly.
 
 | ID | Day/Time | Title | Role | Attendees | Resp. req. | Recurring | Whitelisted | V1 (deterministic) | Acceptable outcome(s) |
 |----|----------|-------|------|-----------|------------|-----------|-------------|--------------------|-----------------------|
-| A1 | Mon 09:00 | Team Sync | Organizer | 3 | no | no | no | cancel | cancel |
-| A2 | Mon 14:00 | Project Kickoff | Organizer | 5 | no | no | no | cancel | cancel |
+| A1 | Mon 09:00 | Team Sync | Organizer | 3 | yes | no | no | cancel | cancel |
+| A2 | Mon 14:00 | Project Kickoff | Organizer | 5 | yes | no | no | cancel | cancel |
 | B1 | Tue 10:00 | Budget Review | Invitee | 4 | yes | no | no | decline | decline |
 | B2 | Tue 15:00 | Cross-Team Planning | Invitee | 12 | yes | no | no | decline | decline |
-| C1 | Wed 09:15 | Daily Standup | Invitee | 6 | no | yes | yes | keep | keep |
-| C2 | Wed 11:00 | Weekly All-Hands | Invitee | 40 | no | yes | yes | keep | keep |
+| C1 | Wed 09:15 | Daily Standup | Invitee | 6 | yes | yes | yes | keep | keep |
+| C2 | Wed 11:00 | Weekly All-Hands | Invitee | 40 | yes | yes | yes | keep | keep |
 | D1 | Wed 16:00 | Sync (tbd) | Invitee | 3 | yes | no | no | decline | decline / keep |
 | D2 | Thu 09:30 | Quick Catch-up | Invitee | 2 | no | no | no | delete | delete / keep |
-| E1 | Thu 11:00 | Review with Prof. (Supervisor) | Organizer | 2 | no | no | no | cancel | keep |
+| E1 | Thu 11:00 | Review with Prof. (Supervisor) | Organizer | 2 | yes | no | no | cancel | keep |
 | E2 | Thu 14:00 | Focus Time (self) | Organizer | 0 | no | no | no | keep | keep |
 | E3 | Fri 09:00 | Company Town Hall | Invitee | 50 | no | no | no | delete | keep |
 | E4 | Fri 11:00 | Client Demo (you present) | Invitee | 4 | yes | no | no | decline | keep |
-| E5 | Fri 15:00 | Cancelled Workshop | Invitee | 3 | no | no | no | keep (excluded) | keep (excluded) |
+| E5 | Fri 15:00 | Cancelled Workshop | Invitee | 3 | yes | no | no | keep (excluded) | keep (excluded) |
 
-**Note on "Attendees" category:"" Attendees is the value of attendees.length from Microsoft Graph. The organiser is never part of this array, so the organiser is not counted. For your own organised meetings the number therefore excludes you; for meetings you were invited to it includes you but not the organiser.
-**Note on the "Whitelist" category:** In Outlook, create a category named
-`Whitelist` and assign it to the relevant meeting. The category match is
-case-insensitive and ignores surrounding whitespace, but only the exact word
-`whitelist` is recognised (variants such as `whitelisted` do not match). Meetings
-carrying this category are excluded before classification and are therefore always
-left unchanged.
+**Note on "Attendees":** Attendees is the value of `attendees.length` from Microsoft Graph. The organiser is never part of this array, so the organiser is not counted. For your own organised meetings the number therefore excludes you; for meetings you were invited to it includes you but not the organiser.
 
-**Note on recurring meetings:** Outlook categories (e.g. "Whitelist") apply to the
-entire series. Within a period, either all occurrences are protected or none — a
-single occurrence can only be protected if it is first broken out of the series
-into a standalone event.
+**Note on "Resp. req." for D2 and E3:** Response is deliberately not requested for these two invitee events. This is required to exercise the deterministic deletion path (invitee, no response requested, event has attendees); with a response requested, the deterministic variant would classify them as `decline` instead of `delete`.
 
-> **Note on event sensitivity (C2):** C2 (*Dentist appointment*) is deliberately
-created with Outlook sensitivity set to `private`, while all other events use the
-default `normal`. This is a fixed part of the test setup, documented here so the
-related evaluation finding is reproducible: none of the three workflows read the
-`sensitivity` flag, so a private event is classified by exactly the same
-structural rules as any other, and in the AI variants its subject line is still
-passed to the LLM.
+**Note on the "Whitelist" category:** In Outlook, create a category named `Whitelist` and assign it to the relevant meeting. The category match is case-insensitive and ignores surrounding whitespace, but only the exact word `whitelist` is recognised (variants such as `whitelisted` do not match). Meetings carrying this category are excluded before classification and are therefore always left unchanged.
+
+**Note on recurring meetings:** Outlook categories (e.g. "Whitelist") apply to the entire series. Within a period, either all occurrences are protected or none — a single occurrence can only be protected if it is first broken out of the series into a standalone event.
 
 ## Fictitious attendee addresses
 
